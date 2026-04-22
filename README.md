@@ -32,7 +32,8 @@ SilentClass is a startup-grade full-stack SaaS starter focused on helping studen
 - MongoDB + Mongoose
 - JWT authentication
 - Multer + pdf-parse for content extraction
-- OpenAI SDK for summarization + Whisper-style transcription
+- OpenAI SDK for optional summarization
+- Local Whisper (`faster-whisper`) + `yt-dlp` for media transcription
 
 ## Project Structure
 
@@ -90,42 +91,56 @@ All `/api/notes/*` routes require `Authorization: Bearer <JWT>`.
 ## Production Notes
 
 - Replace the fallback summarizer with dedicated pipelines for chunking + retrieval.
-- Transcription is live via OpenAI audio transcription API; tune model and chunking for your content domain.
+- Media transcription runs locally via `faster-whisper`; tune model and compute type for your hardware.
 - Implement full PDF export service and secure share links.
 - Add email provider workflow for actual reset tokens.
 - Add push/email scheduler worker for revision reminders in production queues.
 - Add cloud object storage for uploads (S3/GCS).
 
+## Local Whisper (Free Audio/Video + YouTube Transcription)
 
-## Local Whisper (Free Audio/Video Transcription)
+This project now uses **local transcription only** for media (audio/video upload and URL transcription), powered by `faster-whisper`.
 
-You can run audio/video transcription fully locally (without OpenAI billing) using `faster-whisper`.
+### Software / dependency checklist
 
-### One-time software needed
-- Python 3.10+
-- `pip` (Python package installer)
+Install these once on your machine:
 
-### Quick setup
+1. **Python 3.10+**
+2. **pip**
+3. Python packages from `server/requirements-whisper.txt`:
+   - `faster-whisper`
+   - `yt-dlp` (used for YouTube URL download)
+
+Run one command:
+
 ```bash
 bash server/scripts/setup_local_whisper.sh
 ```
 
-Then set these variables in `server/.env`:
+### .env settings (minimum)
+
 ```env
-LOCAL_TRANSCRIBE_MODE=local-only
+LOCAL_WHISPER_PYTHON_BIN=py
 LOCAL_WHISPER_MODEL=base
 LOCAL_WHISPER_COMPUTE_TYPE=int8
 LOCAL_WHISPER_DEVICE=cpu
+MAX_TRANSCRIBE_DOWNLOAD_BYTES=104857600
 ```
 
-Now start the backend normally:
-```bash
-npm run dev:server
-```
+> On Linux/macOS, use `python3` instead of `py`.
 
-### Modes
-- `LOCAL_TRANSCRIBE_MODE=local-only` → force local whisper only
-- `LOCAL_TRANSCRIBE_MODE=prefer-local` → local first, fallback to OpenAI if available
-- `LOCAL_TRANSCRIBE_MODE=openai-only` → force OpenAI only
+### YouTube URL support
 
-The local transcriber script is at `server/scripts/local_whisper_transcribe.py`.
+- `https://youtube.com/watch?...` and `https://youtu.be/...` are supported.
+- Backend downloads audio with `yt-dlp`, then transcribes locally.
+- If it fails, the API returns a detailed message including missing dependency hints.
+
+### FFmpeg note
+
+- The `ffmpeg` terminal command is **not strictly required** for basic transcription flow.
+- If certain files fail decoding, installing FFmpeg can improve compatibility.
+
+### Important
+
+No OpenAI API key is required for audio/video transcription.  
+OpenAI remains optional only for advanced text summarization.

@@ -2,49 +2,30 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import OpenAI from 'openai';
 import pdf from 'pdf-parse';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const execFileAsync = promisify(execFile);
-const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_TRANSCRIBE_DOWNLOAD_BYTES || 100 * 1024 * 1024);
-const LOCAL_TRANSCRIBE_MODE = (process.env.LOCAL_TRANSCRIBE_MODE || 'prefer-local').toLowerCase();
-const LOCAL_WHISPER_SCRIPT_PATH = process.env.LOCAL_WHISPER_SCRIPT_PATH || path.resolve(process.cwd(), 'scripts/local_whisper_transcribe.py');
+
+const LOCAL_WHISPER_SCRIPT_PATH =
+  process.env.LOCAL_WHISPER_SCRIPT_PATH ||
+  path.resolve(__dirname, '../../scripts/local_whisper_transcribe.py');
+
 const LOCAL_WHISPER_MODEL = process.env.LOCAL_WHISPER_MODEL || 'base';
 const LOCAL_WHISPER_COMPUTE_TYPE = process.env.LOCAL_WHISPER_COMPUTE_TYPE || 'int8';
 const LOCAL_WHISPER_DEVICE = process.env.LOCAL_WHISPER_DEVICE || 'cpu';
+const LOCAL_WHISPER_PYTHON_BIN = process.env.LOCAL_WHISPER_PYTHON_BIN || 'python3';
 
-const ensureTranscriptionClient = () => {
-  if (!client) {
-    const error = new Error('Transcription requires OPENAI_API_KEY.');
-    error.status = 503;
-    throw error;
-  }
-};
-
-const transcribeWithOpenAI = async (filePath) => {
-  ensureTranscriptionClient();
-
-  const fileStream = fs.createReadStream(filePath);
-  try {
-    const transcript = await client.audio.transcriptions.create({
-      file: fileStream,
-      model: process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe'
-    });
-    return transcript.text;
-  } finally {
-    fileStream.destroy();
-  }
-};
-
-const transcribeWithLocalWhisper = async (filePath) => {
-  const pythonBin = process.env.LOCAL_WHISPER_PYTHON_BIN || 'python3';
-
+const transcribeMediaFile = async (filePath) => {
   try {
     const { stdout } = await execFileAsync(
-      pythonBin,
+      LOCAL_WHISPER_PYTHON_BIN,
       [LOCAL_WHISPER_SCRIPT_PATH, filePath],
       {
         env: {
@@ -58,6 +39,7 @@ const transcribeWithLocalWhisper = async (filePath) => {
     );
 
     const normalized = stdout.trim();
+
     if (!normalized) {
       const error = new Error('Local Whisper returned empty output.');
       error.status = 500;
@@ -67,54 +49,158 @@ const transcribeWithLocalWhisper = async (filePath) => {
     return normalized;
   } catch (error) {
     const details = error.stderr?.toString()?.trim() || error.message;
-    const fallbackError = new Error(
-      `Local Whisper transcription failed. Ensure Python 3 and faster-whisper are installed. Details: ${details}`
+
+    const wrapped = new Error(
+      `Local Whisper transcription failed. Ensure Python + requirements are installed. Details: ${details}`
     );
-    fallbackError.status = 503;
-    throw fallbackError;
+
+    wrapped.status = 503;
+    throw wrapped;
   }
 };
 
-const transcribeMediaFile = async (filePath) => {
-  if (LOCAL_TRANSCRIBE_MODE === 'local-only') {
-    return transcribeWithLocalWhisper(filePath);
-  }
+const isYouTubeUrl = (parsedUrl) => {
+  const host = parsedUrl.hostname.toLowerCase();
+  return host.includes('youtube.com') || host.includes('youtu.be');
+};
 
-  if (LOCAL_TRANSCRIBE_MODE === 'openai-only') {
-    return transcribeWithOpenAI(filePath);
-  }
+const downloadYouTubeAudio = async (videoUrl) => {
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `silentclass-youtube-${Date.now()}.%(ext)s`
+  );
 
-  if (LOCAL_TRANSCRIBE_MODE === 'prefer-local') {
-    try {
-      return await transcribeWithLocalWhisper(filePath);
-    } catch {
-      if (!client) throw new Error('Local transcription failed and OPENAI_API_KEY is not configured.');
-      return transcribeWithOpenAI(filePath);
-    }
-  }
-
-  if (LOCAL_TRANSCRIBE_MODE === 'prefer-openai') {
-    if (client) {
-      try {
-        return await transcribeWithOpenAI(filePath);
-      } catch {
-        return transcribeWithLocalWhisper(filePath);
-      }
-    }
-    return transcribeWithLocalWhisper(filePath);
-  }
-
-  // Default mode: prefer local first
   try {
-    return await transcribeWithLocalWhisper(filePath);
-  } catch {
-    if (!client) throw new Error('Local transcription failed and OPENAI_API_KEY is not configured.');
-    return transcribeWithOpenAI(filePath);
+    await execFileAsync(
+      LOCAL_WHISPER_PYTHON_BIN,
+      [
+        '-m',
+        'yt_dlp',
+        '--no-playlist',
+        '-f',
+        'bestaudio/best',
+        '-o',
+        tmpPath,
+        videoUrl
+      ],
+      {
+        maxBuffer: 20 * 1024 * 1024
+      }
+    );
+
+    const dir = path.dirname(tmpPath);
+    const prefix = path.basename(tmpPath).replace('.%(ext)s', '');
+
+    const files = await fsPromises.readdir(dir);
+
+    const downloadedFile = files
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => path.join(dir, name))
+      .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
+
+    if (!downloadedFile) {
+      const error = new Error(
+        'YouTube download completed but media file was not found in temp directory.'
+      );
+      error.status = 500;
+      throw error;
+    }
+
+    const stat = await fsPromises.stat(downloadedFile);
+
+    if (stat.size > MAX_DOWNLOAD_BYTES) {
+      await fsPromises.unlink(downloadedFile).catch(() => {});
+
+      const error = new Error(
+        `YouTube media exceeded ${Math.round(
+          MAX_DOWNLOAD_BYTES / (1024 * 1024)
+        )}MB limit.`
+      );
+
+      error.status = 413;
+      throw error;
+    }
+
+    return downloadedFile;
+  } catch (error) {
+    const details = error.stderr?.toString()?.trim() || error.message;
+
+    const wrapped = new Error(
+      `Unable to process YouTube URL. Ensure 'yt-dlp' is installed in Python environment. Details: ${details}`
+    );
+
+    wrapped.status = error.status || 400;
+    throw wrapped;
+  }
+};
+
+const downloadDirectMediaFromUrl = async (parsed) => {
+  const response = await fetch(parsed.toString());
+
+  if (!response.ok || !response.body) {
+    const error = new Error('Unable to fetch media URL for transcription.');
+    error.status = 400;
+    throw error;
+  }
+
+  const contentLength = Number(response.headers.get('content-length'));
+
+  if (contentLength && contentLength > MAX_DOWNLOAD_BYTES) {
+    const error = new Error(
+      `Remote file is too large. Max supported size is ${Math.round(
+        MAX_DOWNLOAD_BYTES / (1024 * 1024)
+      )}MB.`
+    );
+
+    error.status = 413;
+    throw error;
+  }
+
+  const extension = path.extname(parsed.pathname) || '.media';
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `silentclass-url-${Date.now()}${extension}`
+  );
+
+  const writer = fs.createWriteStream(tmpPath);
+  let total = 0;
+
+  try {
+    for await (const chunk of response.body) {
+      total += chunk.length;
+
+      if (total > MAX_DOWNLOAD_BYTES) {
+        writer.destroy();
+        await fsPromises.unlink(tmpPath).catch(() => {});
+
+        const error = new Error(
+          `Remote file exceeded ${Math.round(
+            MAX_DOWNLOAD_BYTES / (1024 * 1024)
+          )}MB limit.`
+        );
+
+        error.status = 413;
+        throw error;
+      }
+
+      writer.write(chunk);
+    }
+
+    await new Promise((resolve, reject) => {
+      writer.end(resolve);
+      writer.on('error', reject);
+    });
+
+    return tmpPath;
+  } catch (error) {
+    await fsPromises.unlink(tmpPath).catch(() => {});
+    throw error;
   }
 };
 
 const downloadFileFromUrl = async (url) => {
   let parsed;
+
   try {
     parsed = new URL(url);
   } catch {
@@ -129,43 +215,11 @@ const downloadFileFromUrl = async (url) => {
     throw error;
   }
 
-  const response = await fetch(parsed.toString());
-  if (!response.ok || !response.body) {
-    const error = new Error('Unable to fetch media URL for transcription.');
-    error.status = 400;
-    throw error;
+  if (isYouTubeUrl(parsed)) {
+    return downloadYouTubeAudio(parsed.toString());
   }
 
-  const contentLength = Number(response.headers.get('content-length'));
-  if (contentLength && contentLength > MAX_DOWNLOAD_BYTES) {
-    const error = new Error(`Remote file is too large. Max supported size is ${Math.round(MAX_DOWNLOAD_BYTES / (1024 * 1024))}MB.`);
-    error.status = 413;
-    throw error;
-  }
-
-  const extension = path.extname(parsed.pathname) || '.media';
-  const tmpPath = path.join(os.tmpdir(), `silentclass-url-${Date.now()}${extension}`);
-  const writer = fs.createWriteStream(tmpPath);
-
-  let total = 0;
-  for await (const chunk of response.body) {
-    total += chunk.length;
-    if (total > MAX_DOWNLOAD_BYTES) {
-      writer.destroy();
-      await fsPromises.unlink(tmpPath).catch(() => {});
-      const error = new Error(`Remote file exceeded ${Math.round(MAX_DOWNLOAD_BYTES / (1024 * 1024))}MB limit.`);
-      error.status = 413;
-      throw error;
-    }
-    writer.write(chunk);
-  }
-
-  await new Promise((resolve, reject) => {
-    writer.end(resolve);
-    writer.on('error', reject);
-  });
-
-  return tmpPath;
+  return downloadDirectMediaFromUrl(parsed);
 };
 
 export const extractTextFromPdf = async (filePath) => {
@@ -174,12 +228,15 @@ export const extractTextFromPdf = async (filePath) => {
   return parsed.text;
 };
 
-export const extractTextFromVideo = async (filePath) => transcribeMediaFile(filePath);
+export const extractTextFromVideo = async (filePath) =>
+  transcribeMediaFile(filePath);
 
-export const extractTextFromAudio = async (filePath) => transcribeMediaFile(filePath);
+export const extractTextFromAudio = async (filePath) =>
+  transcribeMediaFile(filePath);
 
 export const extractTextFromVideoUrl = async (videoUrl) => {
   const downloadedPath = await downloadFileFromUrl(videoUrl);
+
   try {
     return await transcribeMediaFile(downloadedPath);
   } finally {

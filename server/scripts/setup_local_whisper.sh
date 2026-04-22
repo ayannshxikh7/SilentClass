@@ -12,7 +12,7 @@ fi
 "$PYTHON_BIN" -m pip install --upgrade pip
 "$PYTHON_BIN" -m pip install -r "$ROOT_DIR/requirements-whisper.txt"
 
-echo "✅ Local Whisper dependencies installed."
+echo "✅ Local Whisper + yt-dlp dependencies installed."
 echo "Next steps:"
-echo "1) Set in server/.env -> LOCAL_TRANSCRIBE_MODE=local-only"
+echo "1) Ensure server/.env has LOCAL_WHISPER_PYTHON_BIN set correctly (python3 / py / python)."
 echo "2) Start server: npm run dev --workspace server"
