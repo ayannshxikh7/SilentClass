@@ -11,6 +11,7 @@ import {
   uploadVideo
 } from '../controllers/notes.controller.js';
 import { requireAuth } from '../middleware/auth.middleware.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 
 const mediaFileFilter = (_req, file, cb) => {
   if (file.mimetype.startsWith('video/') || file.mimetype.startsWith('audio/')) {
@@ -35,13 +36,13 @@ const router = Router();
 
 router.use(requireAuth);
 
-router.get('/dashboard', getDashboard);
-router.post('/summarize', summarize);
-router.post('/transcript/preview', previewTranscript);
-router.post('/upload/pdf', pdfUpload.single('pdf'), uploadPdf);
-router.post('/upload/video', mediaUpload.single('video'), uploadVideo);
-router.post('/upload/audio', mediaUpload.single('audio'), uploadAudio);
-router.patch('/:id/favorite', toggleFavorite);
-router.patch('/:id/meta', updateNoteMeta);
+router.get('/dashboard', asyncHandler(getDashboard));
+router.post('/summarize', asyncHandler(summarize));
+router.post('/transcript/preview', asyncHandler(previewTranscript));
+router.post('/upload/pdf', pdfUpload.single('pdf'), asyncHandler(uploadPdf));
+router.post('/upload/video', mediaUpload.single('video'), asyncHandler(uploadVideo));
+router.post('/upload/audio', mediaUpload.single('audio'), asyncHandler(uploadAudio));
+router.patch('/:id/favorite', asyncHandler(toggleFavorite));
+router.patch('/:id/meta', asyncHandler(updateNoteMeta));
 
 export default router;
