@@ -102,6 +102,7 @@ All `/api/notes/*` routes require `Authorization: Bearer <JWT>`.
 This project now uses **local transcription only** for media (audio/video upload and URL transcription), powered by `faster-whisper`.
 
 ### Software / dependency checklist
+
 Install these once on your machine:
 
 1. **Python 3.10+**
@@ -111,27 +112,35 @@ Install these once on your machine:
    - `yt-dlp` (used for YouTube URL download)
 
 Run one command:
+
 ```bash
 bash server/scripts/setup_local_whisper.sh
 ```
 
 ### .env settings (minimum)
+
 ```env
-LOCAL_WHISPER_PYTHON_BIN=python3
+LOCAL_WHISPER_PYTHON_BIN=py
 LOCAL_WHISPER_MODEL=base
 LOCAL_WHISPER_COMPUTE_TYPE=int8
 LOCAL_WHISPER_DEVICE=cpu
 MAX_TRANSCRIBE_DOWNLOAD_BYTES=104857600
 ```
 
-> On Windows, `LOCAL_WHISPER_PYTHON_BIN=py` often works better than `python`.
+> On Linux/macOS, use `python3` instead of `py`.
 
 ### YouTube URL support
+
 - `https://youtube.com/watch?...` and `https://youtu.be/...` are supported.
 - Backend downloads audio with `yt-dlp`, then transcribes locally.
 - If it fails, the API returns a detailed message including missing dependency hints.
 
 ### FFmpeg note
-- For this setup, the `ffmpeg` terminal command is **not strictly required** for basic transcription flow.
-- If your environment still raises decoding errors for certain files, installing FFmpeg can improve compatibility.
 
+- The `ffmpeg` terminal command is **not strictly required** for basic transcription flow.
+- If certain files fail decoding, installing FFmpeg can improve compatibility.
+
+### Important
+
+No OpenAI API key is required for audio/video transcription.  
+OpenAI remains optional only for advanced text summarization.

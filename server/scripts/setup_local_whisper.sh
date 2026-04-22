@@ -14,5 +14,5 @@ fi
 
 echo "✅ Local Whisper + yt-dlp dependencies installed."
 echo "Next steps:"
-echo "1) Ensure server/.env has LOCAL_WHISPER_PYTHON_BIN set correctly (python3/py/python)."
+echo "1) Ensure server/.env has LOCAL_WHISPER_PYTHON_BIN set correctly (python3 / py / python)."
 echo "2) Start server: npm run dev --workspace server"

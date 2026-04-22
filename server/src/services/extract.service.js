@@ -12,7 +12,11 @@ const __dirname = path.dirname(__filename);
 
 const execFileAsync = promisify(execFile);
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_TRANSCRIBE_DOWNLOAD_BYTES || 100 * 1024 * 1024);
-const LOCAL_WHISPER_SCRIPT_PATH = process.env.LOCAL_WHISPER_SCRIPT_PATH || path.resolve(__dirname, '../../scripts/local_whisper_transcribe.py');
+
+const LOCAL_WHISPER_SCRIPT_PATH =
+  process.env.LOCAL_WHISPER_SCRIPT_PATH ||
+  path.resolve(__dirname, '../../scripts/local_whisper_transcribe.py');
+
 const LOCAL_WHISPER_MODEL = process.env.LOCAL_WHISPER_MODEL || 'base';
 const LOCAL_WHISPER_COMPUTE_TYPE = process.env.LOCAL_WHISPER_COMPUTE_TYPE || 'int8';
 const LOCAL_WHISPER_DEVICE = process.env.LOCAL_WHISPER_DEVICE || 'cpu';
@@ -35,6 +39,7 @@ const transcribeMediaFile = async (filePath) => {
     );
 
     const normalized = stdout.trim();
+
     if (!normalized) {
       const error = new Error('Local Whisper returned empty output.');
       error.status = 500;
@@ -44,9 +49,11 @@ const transcribeMediaFile = async (filePath) => {
     return normalized;
   } catch (error) {
     const details = error.stderr?.toString()?.trim() || error.message;
+
     const wrapped = new Error(
       `Local Whisper transcription failed. Ensure Python + requirements are installed. Details: ${details}`
     );
+
     wrapped.status = 503;
     throw wrapped;
   }
@@ -58,7 +65,10 @@ const isYouTubeUrl = (parsedUrl) => {
 };
 
 const downloadYouTubeAudio = async (videoUrl) => {
-  const tmpPath = path.join(os.tmpdir(), `silentclass-youtube-${Date.now()}.%(ext)s`);
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `silentclass-youtube-${Date.now()}.%(ext)s`
+  );
 
   try {
     await execFileAsync(
@@ -80,22 +90,33 @@ const downloadYouTubeAudio = async (videoUrl) => {
 
     const dir = path.dirname(tmpPath);
     const prefix = path.basename(tmpPath).replace('.%(ext)s', '');
+
     const files = await fsPromises.readdir(dir);
+
     const downloadedFile = files
       .filter((name) => name.startsWith(prefix))
       .map((name) => path.join(dir, name))
       .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0];
 
     if (!downloadedFile) {
-      const error = new Error('YouTube download completed but media file was not found in temp directory.');
+      const error = new Error(
+        'YouTube download completed but media file was not found in temp directory.'
+      );
       error.status = 500;
       throw error;
     }
 
     const stat = await fsPromises.stat(downloadedFile);
+
     if (stat.size > MAX_DOWNLOAD_BYTES) {
       await fsPromises.unlink(downloadedFile).catch(() => {});
-      const error = new Error(`YouTube media exceeded ${Math.round(MAX_DOWNLOAD_BYTES / (1024 * 1024))}MB limit.`);
+
+      const error = new Error(
+        `YouTube media exceeded ${Math.round(
+          MAX_DOWNLOAD_BYTES / (1024 * 1024)
+        )}MB limit.`
+      );
+
       error.status = 413;
       throw error;
     }
@@ -103,9 +124,11 @@ const downloadYouTubeAudio = async (videoUrl) => {
     return downloadedFile;
   } catch (error) {
     const details = error.stderr?.toString()?.trim() || error.message;
+
     const wrapped = new Error(
       `Unable to process YouTube URL. Ensure 'yt-dlp' is installed in Python environment. Details: ${details}`
     );
+
     wrapped.status = error.status || 400;
     throw wrapped;
   }
@@ -113,6 +136,7 @@ const downloadYouTubeAudio = async (videoUrl) => {
 
 const downloadDirectMediaFromUrl = async (parsed) => {
   const response = await fetch(parsed.toString());
+
   if (!response.ok || !response.body) {
     const error = new Error('Unable to fetch media URL for transcription.');
     error.status = 400;
@@ -120,27 +144,45 @@ const downloadDirectMediaFromUrl = async (parsed) => {
   }
 
   const contentLength = Number(response.headers.get('content-length'));
+
   if (contentLength && contentLength > MAX_DOWNLOAD_BYTES) {
-    const error = new Error(`Remote file is too large. Max supported size is ${Math.round(MAX_DOWNLOAD_BYTES / (1024 * 1024))}MB.`);
+    const error = new Error(
+      `Remote file is too large. Max supported size is ${Math.round(
+        MAX_DOWNLOAD_BYTES / (1024 * 1024)
+      )}MB.`
+    );
+
     error.status = 413;
     throw error;
   }
 
   const extension = path.extname(parsed.pathname) || '.media';
-  const tmpPath = path.join(os.tmpdir(), `silentclass-url-${Date.now()}${extension}`);
-  const writer = fs.createWriteStream(tmpPath);
+  const tmpPath = path.join(
+    os.tmpdir(),
+    `silentclass-url-${Date.now()}${extension}`
+  );
 
+  const writer = fs.createWriteStream(tmpPath);
   let total = 0;
+
   try {
     for await (const chunk of response.body) {
       total += chunk.length;
+
       if (total > MAX_DOWNLOAD_BYTES) {
         writer.destroy();
         await fsPromises.unlink(tmpPath).catch(() => {});
-        const error = new Error(`Remote file exceeded ${Math.round(MAX_DOWNLOAD_BYTES / (1024 * 1024))}MB limit.`);
+
+        const error = new Error(
+          `Remote file exceeded ${Math.round(
+            MAX_DOWNLOAD_BYTES / (1024 * 1024)
+          )}MB limit.`
+        );
+
         error.status = 413;
         throw error;
       }
+
       writer.write(chunk);
     }
 
@@ -158,6 +200,7 @@ const downloadDirectMediaFromUrl = async (parsed) => {
 
 const downloadFileFromUrl = async (url) => {
   let parsed;
+
   try {
     parsed = new URL(url);
   } catch {
@@ -185,12 +228,15 @@ export const extractTextFromPdf = async (filePath) => {
   return parsed.text;
 };
 
-export const extractTextFromVideo = async (filePath) => transcribeMediaFile(filePath);
+export const extractTextFromVideo = async (filePath) =>
+  transcribeMediaFile(filePath);
 
-export const extractTextFromAudio = async (filePath) => transcribeMediaFile(filePath);
+export const extractTextFromAudio = async (filePath) =>
+  transcribeMediaFile(filePath);
 
 export const extractTextFromVideoUrl = async (videoUrl) => {
   const downloadedPath = await downloadFileFromUrl(videoUrl);
+
   try {
     return await transcribeMediaFile(downloadedPath);
   } finally {
