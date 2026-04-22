@@ -95,3 +95,37 @@ All `/api/notes/*` routes require `Authorization: Bearer <JWT>`.
 - Add email provider workflow for actual reset tokens.
 - Add push/email scheduler worker for revision reminders in production queues.
 - Add cloud object storage for uploads (S3/GCS).
+
+
+## Local Whisper (Free Audio/Video Transcription)
+
+You can run audio/video transcription fully locally (without OpenAI billing) using `faster-whisper`.
+
+### One-time software needed
+- Python 3.10+
+- `pip` (Python package installer)
+
+### Quick setup
+```bash
+bash server/scripts/setup_local_whisper.sh
+```
+
+Then set these variables in `server/.env`:
+```env
+LOCAL_TRANSCRIBE_MODE=local-only
+LOCAL_WHISPER_MODEL=base
+LOCAL_WHISPER_COMPUTE_TYPE=int8
+LOCAL_WHISPER_DEVICE=cpu
+```
+
+Now start the backend normally:
+```bash
+npm run dev:server
+```
+
+### Modes
+- `LOCAL_TRANSCRIBE_MODE=local-only` → force local whisper only
+- `LOCAL_TRANSCRIBE_MODE=prefer-local` → local first, fallback to OpenAI if available
+- `LOCAL_TRANSCRIBE_MODE=openai-only` → force OpenAI only
+
+The local transcriber script is at `server/scripts/local_whisper_transcribe.py`.

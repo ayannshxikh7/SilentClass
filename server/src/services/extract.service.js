@@ -2,11 +2,19 @@ import fs from 'fs';
 import fsPromises from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import OpenAI from 'openai';
 import pdf from 'pdf-parse';
 
+const execFileAsync = promisify(execFile);
 const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
 const MAX_DOWNLOAD_BYTES = Number(process.env.MAX_TRANSCRIBE_DOWNLOAD_BYTES || 100 * 1024 * 1024);
+const LOCAL_TRANSCRIBE_MODE = (process.env.LOCAL_TRANSCRIBE_MODE || 'prefer-local').toLowerCase();
+const LOCAL_WHISPER_SCRIPT_PATH = process.env.LOCAL_WHISPER_SCRIPT_PATH || path.resolve(process.cwd(), 'scripts/local_whisper_transcribe.py');
+const LOCAL_WHISPER_MODEL = process.env.LOCAL_WHISPER_MODEL || 'base';
+const LOCAL_WHISPER_COMPUTE_TYPE = process.env.LOCAL_WHISPER_COMPUTE_TYPE || 'int8';
+const LOCAL_WHISPER_DEVICE = process.env.LOCAL_WHISPER_DEVICE || 'cpu';
 
 const ensureTranscriptionClient = () => {
   if (!client) {
@@ -16,7 +24,7 @@ const ensureTranscriptionClient = () => {
   }
 };
 
-const transcribeMediaFile = async (filePath) => {
+const transcribeWithOpenAI = async (filePath) => {
   ensureTranscriptionClient();
 
   const fileStream = fs.createReadStream(filePath);
@@ -28,6 +36,80 @@ const transcribeMediaFile = async (filePath) => {
     return transcript.text;
   } finally {
     fileStream.destroy();
+  }
+};
+
+const transcribeWithLocalWhisper = async (filePath) => {
+  const pythonBin = process.env.LOCAL_WHISPER_PYTHON_BIN || 'python3';
+
+  try {
+    const { stdout } = await execFileAsync(
+      pythonBin,
+      [LOCAL_WHISPER_SCRIPT_PATH, filePath],
+      {
+        env: {
+          ...process.env,
+          LOCAL_WHISPER_MODEL,
+          LOCAL_WHISPER_COMPUTE_TYPE,
+          LOCAL_WHISPER_DEVICE
+        },
+        maxBuffer: 10 * 1024 * 1024
+      }
+    );
+
+    const normalized = stdout.trim();
+    if (!normalized) {
+      const error = new Error('Local Whisper returned empty output.');
+      error.status = 500;
+      throw error;
+    }
+
+    return normalized;
+  } catch (error) {
+    const details = error.stderr?.toString()?.trim() || error.message;
+    const fallbackError = new Error(
+      `Local Whisper transcription failed. Ensure Python 3 and faster-whisper are installed. Details: ${details}`
+    );
+    fallbackError.status = 503;
+    throw fallbackError;
+  }
+};
+
+const transcribeMediaFile = async (filePath) => {
+  if (LOCAL_TRANSCRIBE_MODE === 'local-only') {
+    return transcribeWithLocalWhisper(filePath);
+  }
+
+  if (LOCAL_TRANSCRIBE_MODE === 'openai-only') {
+    return transcribeWithOpenAI(filePath);
+  }
+
+  if (LOCAL_TRANSCRIBE_MODE === 'prefer-local') {
+    try {
+      return await transcribeWithLocalWhisper(filePath);
+    } catch {
+      if (!client) throw new Error('Local transcription failed and OPENAI_API_KEY is not configured.');
+      return transcribeWithOpenAI(filePath);
+    }
+  }
+
+  if (LOCAL_TRANSCRIBE_MODE === 'prefer-openai') {
+    if (client) {
+      try {
+        return await transcribeWithOpenAI(filePath);
+      } catch {
+        return transcribeWithLocalWhisper(filePath);
+      }
+    }
+    return transcribeWithLocalWhisper(filePath);
+  }
+
+  // Default mode: prefer local first
+  try {
+    return await transcribeWithLocalWhisper(filePath);
+  } catch {
+    if (!client) throw new Error('Local transcription failed and OPENAI_API_KEY is not configured.');
+    return transcribeWithOpenAI(filePath);
   }
 };
 
