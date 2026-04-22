@@ -32,7 +32,8 @@ SilentClass is a startup-grade full-stack SaaS starter focused on helping studen
 - MongoDB + Mongoose
 - JWT authentication
 - Multer + pdf-parse for content extraction
-- OpenAI SDK for summarization + Whisper-style transcription
+- OpenAI SDK for optional summarization
+- Local Whisper (`faster-whisper`) + `yt-dlp` for media transcription
 
 ## Project Structure
 
@@ -90,7 +91,7 @@ All `/api/notes/*` routes require `Authorization: Bearer <JWT>`.
 ## Production Notes
 
 - Replace the fallback summarizer with dedicated pipelines for chunking + retrieval.
-- Transcription is live via OpenAI audio transcription API; tune model and chunking for your content domain.
+- Media transcription runs locally via `faster-whisper`; tune model and compute type for your hardware.
 - Implement full PDF export service and secure share links.
 - Add email provider workflow for actual reset tokens.
 - Add push/email scheduler worker for revision reminders in production queues.
